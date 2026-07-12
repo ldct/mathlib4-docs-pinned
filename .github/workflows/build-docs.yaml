@@ -1,0 +1,73 @@
+name: build pinned docs
+
+# Builds rendered docs for one mathlib4 release tag and uploads the result as
+# release assets (release "docs-<tag>"). Run "deploy pages" afterwards to
+# publish. Modeled on
+# https://github.com/leanprover-community/mathlib4_docs/blob/main/.github/workflows/docs.yaml
+#
+# CAVEAT: the official pipeline uses a dedicated beefy runner ("doc-gen").
+# On a standard ubuntu-latest runner this job needs most of the disk (hence
+# the cleanup step) and several hours; it may hit the 6h job limit or OOM.
+# Building locally with scripts/build-docs.sh is the reliable path.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mathlib_tag:
+        description: "mathlib4 release tag (e.g. v4.31.0)"
+        required: true
+        type: string
+      docgen_tag:
+        description: "doc-gen4 tag (defaults to the toolchain tag; e.g. v4.32.0-rc1 for mathlib v4.32.0-rc1-patch1)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: checkout
+        uses: actions/checkout@v6
+
+      - name: install elan
+        run: |
+          set -o pipefail
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- --default-toolchain none -y
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: build docs
+        env:
+          MATHLIB_TAG: ${{ inputs.mathlib_tag }}
+          DGTAG: ${{ inputs.docgen_tag }}
+        run: |
+          bash scripts/build-docs.sh "$MATHLIB_TAG" "${DGTAG:-$MATHLIB_TAG}" "$RUNNER_TEMP/build"
+
+      - name: upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MATHLIB_TAG: ${{ inputs.mathlib_tag }}
+        run: |
+          cd "$RUNNER_TEMP/build"
+          TARBALL="mathlib4-docs-$MATHLIB_TAG.tar.gz"
+          gh release view "docs-$MATHLIB_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "docs-$MATHLIB_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Rendered docs for $MATHLIB_TAG" \
+              --notes "Rendered HTML documentation for mathlib4 $MATHLIB_TAG (contents of .lake/build/doc). Used by the deploy-pages workflow."
+          SIZE=$(stat -c%s "$TARBALL")
+          if [ "$SIZE" -gt 1900000000 ]; then
+            split -b 1900m "$TARBALL" "$TARBALL.part-"
+            gh release upload "docs-$MATHLIB_TAG" --repo "$GITHUB_REPOSITORY" --clobber "$TARBALL".part-*
+          else
+            gh release upload "docs-$MATHLIB_TAG" --repo "$GITHUB_REPOSITORY" --clobber "$TARBALL"
+          fi

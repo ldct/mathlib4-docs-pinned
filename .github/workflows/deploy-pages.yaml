@@ -1,0 +1,57 @@
+name: deploy pages
+
+# Assembles the Pages site from the per-version release assets (docs-<tag>
+# releases, one subdirectory per version in versions.json) and deploys it
+# with actions/deploy-pages. HTML never enters git history.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v6
+
+      - name: assemble site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          mkdir -p _site
+          for v in $(jq -r '.[]' versions.json); do
+            mkdir -p "dl/$v" "_site/$v"
+            gh release download "docs-$v" --repo "$GITHUB_REPOSITORY" --dir "dl/$v"
+            if ls "dl/$v"/*.part-* >/dev/null 2>&1; then
+              cat "dl/$v"/*.part-* > "dl/$v/docs.tar.gz"
+              rm "dl/$v"/*.part-*
+            else
+              mv "dl/$v"/mathlib4-docs-*.tar.gz "dl/$v/docs.tar.gz"
+            fi
+            tar -xzf "dl/$v/docs.tar.gz" -C "_site/$v"
+            rm -rf "dl/$v"
+          done
+          python3 scripts/make_index.py > _site/index.html
+          du -sh _site/* _site
+
+      - name: upload pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - name: deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
