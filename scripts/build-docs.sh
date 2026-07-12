@@ -63,7 +63,9 @@ if [ ! -d .git ]; then
 fi
 
 mkdir -p .lake/packages
-cp -r "$ML/.lake/packages/"* .lake/packages/
+if [ ! -d .lake/packages/batteries ]; then
+  cp -r "$ML/.lake/packages/"* .lake/packages/
+fi
 lake update
 # doc-gen4 lacks support for subproject references.bib; copy it over
 mkdir -p docs
